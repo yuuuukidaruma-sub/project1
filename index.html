@@ -1,0 +1,389 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>project</title>
+<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;padding:24px;background:#f4f6fa;
+  color:#222;font-family:Arial,sans-serif;
+}
+main{max-width:650px;margin:auto}
+h1{font-size:32px;margin-bottom:5px}
+.sub{color:#777;margin-top:0}
+.card{
+  background:white;padding:22px;border-radius:16px;
+  margin-top:20px;box-shadow:0 3px 15px #0000000a;
+}
+button,input{
+  width:100%;padding:14px;margin-top:10px;
+  border-radius:9px;font-size:16px;
+}
+button{border:0;background:#2878ed;color:white;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+.stop{background:#e54848}
+.secondary{background:#e9edf5;color:#333}
+input{border:1px solid #ddd}
+video{
+  width:100%;background:#111;border-radius:12px;
+  margin-top:12px;max-height:360px;
+}
+.status{color:#777;font-size:14px;margin-top:12px}
+.id{
+  background:#f1f4f9;padding:13px;border-radius:9px;
+  word-break:break-all;font-weight:bold;
+}
+.hidden{display:none}
+.note{font-size:12px;color:#888;line-height:1.6}
+.badge{
+  display:inline-block;padding:6px 10px;
+  background:#e9edf5;border-radius:20px;font-size:13px;
+}
+</style>
+</head>
+<body>
+<main>
+<h1>project</h1>
+<p class="sub">Remote Camera System</p>
+
+<div class="card">
+<h2>接続モード</h2>
+<button onclick="showMode('camera')">カメラ側</button>
+<button class="secondary" onclick="showMode('viewer')">見る側</button>
+</div>
+
+<div class="card hidden" id="cameraPanel">
+<h2>カメラ設定</h2>
+<p>同時視聴人数：<b>1人まで</b></p>
+<div class="badge" id="cameraBadge">停止中</div>
+
+<button id="startButton" onclick="startCamera()">
+配信開始
+</button>
+<button class="stop" onclick="stopCamera()">
+配信停止
+</button>
+
+<p>あなたのカメラID</p>
+<div class="id" id="cameraId">未配信</div>
+
+<p class="status" id="cameraStatus">停止中</p>
+<p class="status" id="viewerCount">視聴者：0 / 1</p>
+
+<video id="localVideo" autoplay muted playsinline></video>
+
+<p class="note">
+配信中はカメラの使用が分かる状態にしてください。
+IDを知っている人は接続できます。
+信頼できる相手にだけIDを共有してください。
+</p>
+</div>
+
+<div class="card hidden" id="viewerPanel">
+<h2>カメラに接続</h2>
+<input id="targetId" placeholder="カメラID">
+<button id="connectButton" onclick="connectCamera()">
+接続する
+</button>
+<button class="secondary" onclick="disconnectViewer()">
+接続を終了
+</button>
+
+<p class="status" id="viewerStatus">未接続</p>
+<video id="remoteVideo" autoplay playsinline></video>
+</div>
+</main>
+
+<script>
+let cameraPeer=null;
+let viewerPeer=null;
+let cameraStream=null;
+
+let activeDataConn=null;
+let activeCall=null;
+let viewerConn=null;
+let viewerCall=null;
+
+let cameraConnections=[];
+
+function showMode(mode){
+  document.getElementById("cameraPanel")
+    .classList.toggle("hidden",mode!=="camera");
+  document.getElementById("viewerPanel")
+    .classList.toggle("hidden",mode!=="viewer");
+}
+
+function status(id,message){
+  document.getElementById(id).textContent=message;
+}
+
+// ver.4と同じID形式
+function makeId(){
+  const bytes=new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  const random=Array.from(bytes)
+    .map(b=>b.toString(16).padStart(2,"0"))
+    .join("");
+  return "PROJECT-"+random;
+}
+
+function updateViewerCount(){
+  const busy=activeDataConn!==null;
+
+  status("viewerCount","視聴者："+(busy?"1":"0")+" / 1");
+
+  document.getElementById("cameraBadge").textContent=
+    cameraPeer
+      ? (busy?"● 1人が視聴中":"● 配信中・待機中")
+      : "停止中";
+}
+
+function releaseViewer(conn){
+  if(activeDataConn!==conn)return;
+
+  const oldCall=activeCall;
+  activeCall=null;
+  activeDataConn=null;
+
+  if(oldCall)oldCall.close();
+
+  updateViewerCount();
+
+  if(cameraPeer){
+    status("cameraStatus","● 配信中・待機中");
+  }
+}
+
+async function startCamera(){
+  if(cameraPeer)return;
+
+  const startButton=document.getElementById("startButton");
+  startButton.disabled=true;
+
+  try{
+    status("cameraStatus","カメラを起動しています...");
+
+    cameraStream=await navigator.mediaDevices.getUserMedia({
+      video:true,
+      audio:false
+    });
+
+    document.getElementById("localVideo").srcObject=cameraStream;
+
+    cameraPeer=new Peer(makeId());
+
+    cameraPeer.on("open",id=>{
+      document.getElementById("cameraId").textContent=id;
+      status("cameraStatus","● 配信中・待機中");
+      updateViewerCount();
+    });
+
+    cameraPeer.on("connection",conn=>{
+      cameraConnections.push(conn);
+
+      conn.on("data",data=>{
+        if(!data || data.type!=="VIEW_REQUEST")return;
+
+        // 接続相手のPeer IDを照合
+        if(data.viewerId!==conn.peer){
+          conn.close();
+          return;
+        }
+
+        // すでに別の人が視聴中なら拒否
+        if(activeDataConn!==null && activeDataConn!==conn){
+          conn.send({
+            type:"ERROR",
+            message:"別の人が視聴中です"
+          });
+          conn.close();
+          return;
+        }
+
+        // 同じ相手からの重複要求は無視
+        if(activeDataConn===conn)return;
+
+        // 最初の視聴者を確保
+        activeDataConn=conn;
+        updateViewerCount();
+        status("cameraStatus","● 1人が視聴中");
+
+        try{
+          const call=cameraPeer.call(conn.peer,cameraStream);
+          activeCall=call;
+
+          call.on("close",()=>{
+            if(activeCall===call){
+              releaseViewer(conn);
+            }
+          });
+
+          call.on("error",()=>{
+            if(activeCall===call){
+              releaseViewer(conn);
+            }
+          });
+
+        }catch(e){
+          releaseViewer(conn);
+        }
+      });
+
+      conn.on("close",()=>{
+        releaseViewer(conn);
+      });
+
+      conn.on("error",()=>{
+        releaseViewer(conn);
+      });
+    });
+
+    cameraPeer.on("error",err=>{
+      status("cameraStatus","通信エラー: "+err.type);
+    });
+
+    cameraPeer.on("disconnected",()=>{
+      status("cameraStatus","通信サーバーとの接続が切れました");
+    });
+
+  }catch(e){
+    status("cameraStatus","起動できませんでした");
+    alert(e.message);
+    stopCamera();
+  }
+}
+
+function stopCamera(){
+  // すべての視聴通信を終了
+  const oldCall=activeCall;
+  activeCall=null;
+  activeDataConn=null;
+
+  if(oldCall)oldCall.close();
+
+  cameraConnections.forEach(conn=>{
+    try{conn.close()}catch(e){}
+  });
+  cameraConnections=[];
+
+  if(cameraPeer){
+    cameraPeer.destroy();
+    cameraPeer=null;
+  }
+
+  if(cameraStream){
+    cameraStream.getTracks().forEach(track=>track.stop());
+    cameraStream=null;
+  }
+
+  document.getElementById("localVideo").srcObject=null;
+  document.getElementById("cameraId").textContent="未配信";
+  document.getElementById("startButton").disabled=false;
+
+  status("cameraStatus","停止中");
+  status("viewerCount","視聴者：0 / 1");
+  document.getElementById("cameraBadge").textContent="停止中";
+}
+
+function connectCamera(){
+  const target=document.getElementById("targetId").value.trim();
+
+  if(!target){
+    alert("カメラIDを入力してください");
+    return;
+  }
+
+  disconnectViewer();
+
+  status("viewerStatus","接続しています...");
+  document.getElementById("connectButton").disabled=true;
+
+  viewerPeer=new Peer();
+
+  viewerPeer.on("open",viewerId=>{
+    viewerConn=viewerPeer.connect(target);
+
+    viewerConn.on("open",()=>{
+      viewerConn.send({
+        type:"VIEW_REQUEST",
+        viewerId:viewerId
+      });
+    });
+
+    viewerConn.on("data",data=>{
+      if(data && data.type==="ERROR"){
+        status("viewerStatus",data.message);
+        disconnectViewer();
+      }
+    });
+
+    viewerConn.on("close",()=>{
+      if(viewerConn){
+        viewerConn=null;
+        status("viewerStatus","接続が終了しました");
+        document.getElementById("connectButton").disabled=false;
+      }
+    });
+
+    viewerConn.on("error",()=>{
+      status("viewerStatus","通信エラー");
+      document.getElementById("connectButton").disabled=false;
+    });
+  });
+
+  viewerPeer.on("call",call=>{
+    viewerCall=call;
+    call.answer();
+
+    call.on("stream",remoteStream=>{
+      document.getElementById("remoteVideo").srcObject=remoteStream;
+      status("viewerStatus","● 接続成功・映像受信中");
+      document.getElementById("connectButton").disabled=false;
+    });
+
+    call.on("close",()=>{
+      if(viewerCall===call){
+        viewerCall=null;
+        document.getElementById("remoteVideo").srcObject=null;
+        status("viewerStatus","配信が終了しました");
+        document.getElementById("connectButton").disabled=false;
+      }
+    });
+
+    call.on("error",()=>{
+      status("viewerStatus","映像の受信に失敗しました");
+      document.getElementById("connectButton").disabled=false;
+    });
+  });
+
+  viewerPeer.on("error",err=>{
+    status("viewerStatus","接続エラー: "+err.type);
+    document.getElementById("connectButton").disabled=false;
+  });
+}
+
+function disconnectViewer(){
+  const oldCall=viewerCall;
+  const oldConn=viewerConn;
+  const oldPeer=viewerPeer;
+
+  viewerCall=null;
+  viewerConn=null;
+  viewerPeer=null;
+
+  if(oldCall)oldCall.close();
+  if(oldConn)oldConn.close();
+  if(oldPeer)oldPeer.destroy();
+
+  document.getElementById("remoteVideo").srcObject=null;
+  document.getElementById("connectButton").disabled=false;
+  status("viewerStatus","未接続");
+}
+</script>
+</body>
+</html>
+a
