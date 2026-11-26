@@ -94,7 +94,7 @@ IDを知っている人は接続できます。
 </button>
 
 <p class="status" id="viewerStatus">未接続</p>
-<video id="remoteVideo" autoplay playsinline></video>
+<video id="remoteVideo" autoplay playsinline controls></video>
 </div>
 </main>
 
@@ -167,7 +167,7 @@ async function startCamera(){
 
     cameraStream=await navigator.mediaDevices.getUserMedia({
       video:true,
-      audio:false
+      audio:true
     });
 
     document.getElementById("localVideo").srcObject=cameraStream;
