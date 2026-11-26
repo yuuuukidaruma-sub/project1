@@ -337,11 +337,20 @@ function connectCamera(){
     viewerCall=call;
     call.answer();
 
-    call.on("stream",remoteStream=>{
-      document.getElementById("remoteVideo").srcObject=remoteStream;
-      status("viewerStatus","● 接続成功・映像受信中");
-      document.getElementById("connectButton").disabled=false;
-    });
+    call.on("stream",async remoteStream=>{
+  const video=document.getElementById("remoteVideo");
+
+  video.srcObject=remoteStream;
+
+  try{
+    await video.play();
+    status("viewerStatus","● 接続成功・映像音声受信中");
+  }catch(e){
+    status("viewerStatus","画面をタップして再生してください");
+  }
+
+  document.getElementById("connectButton").disabled=false;
+});
 
     call.on("close",()=>{
       if(viewerCall===call){
