@@ -169,7 +169,10 @@ async function startCamera(){
       video:true,
       audio:true
     });
-
+alert(
+  "音声トラック数: "+
+  cameraStream.getAudioTracks().length
+);
     document.getElementById("localVideo").srcObject=cameraStream;
 
     cameraPeer=new Peer(makeId());
