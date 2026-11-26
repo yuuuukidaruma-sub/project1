@@ -215,6 +215,10 @@ alert(
 
         try{
           const call=cameraPeer.call(conn.peer,cameraStream);
+          console.log("送信音声:",call.peerConnection.getSenders().map(s=>({
+  kind:s.track?.kind,
+  enabled:s.track?.enabled
+})));
           activeCall=call;
 
           call.on("close",()=>{
@@ -340,7 +344,7 @@ function connectCamera(){
     viewerCall=call;
     call.answer();
 
-    call.on("stream",async remoteStream=>{
+    call.on("stream",console.log("受信音声:",remoteStream.getAudioTracks());async remoteStream=>{
   const video=document.getElementById("remoteVideo");
 
   video.srcObject=remoteStream;
