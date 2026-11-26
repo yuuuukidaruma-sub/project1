@@ -94,7 +94,7 @@ IDを知っている人は接続できます。
 </button>
 
 <p class="status" id="viewerStatus">未接続</p>
-<video id="remoteVideo" autoplay playsinline controls></video>
+<video id="remoteVideo" autoplay playsinline></video>
 </div>
 </main>
 
@@ -121,8 +121,7 @@ function status(id,message){
   document.getElementById(id).textContent=message;
 }
 
-// ver.4と同じID形式
-// 短くてわかりやすい6桁ID
+// 6桁の数字ID
 function makeId(){
   return String(
     crypto.getRandomValues(new Uint32Array(1))[0] % 1000000
@@ -167,12 +166,9 @@ async function startCamera(){
 
     cameraStream=await navigator.mediaDevices.getUserMedia({
       video:true,
-      audio:true
+      audio:false
     });
-alert(
-  "音声トラック数: "+
-  cameraStream.getAudioTracks().length
-);
+
     document.getElementById("localVideo").srcObject=cameraStream;
 
     cameraPeer=new Peer(makeId());
@@ -189,13 +185,11 @@ alert(
       conn.on("data",data=>{
         if(!data || data.type!=="VIEW_REQUEST")return;
 
-        // 接続相手のPeer IDを照合
         if(data.viewerId!==conn.peer){
           conn.close();
           return;
         }
 
-        // すでに別の人が視聴中なら拒否
         if(activeDataConn!==null && activeDataConn!==conn){
           conn.send({
             type:"ERROR",
@@ -205,20 +199,14 @@ alert(
           return;
         }
 
-        // 同じ相手からの重複要求は無視
         if(activeDataConn===conn)return;
 
-        // 最初の視聴者を確保
         activeDataConn=conn;
         updateViewerCount();
         status("cameraStatus","● 1人が視聴中");
 
         try{
           const call=cameraPeer.call(conn.peer,cameraStream);
-          console.log("送信音声:",call.peerConnection.getSenders().map(s=>({
-  kind:s.track?.kind,
-  enabled:s.track?.enabled
-})));
           activeCall=call;
 
           call.on("close",()=>{
@@ -263,7 +251,6 @@ alert(
 }
 
 function stopCamera(){
-  // すべての視聴通信を終了
   const oldCall=activeCall;
   activeCall=null;
   activeDataConn=null;
@@ -344,20 +331,11 @@ function connectCamera(){
     viewerCall=call;
     call.answer();
 
-    call.on("stream",console.log("受信音声:",remoteStream.getAudioTracks());async remoteStream=>{
-  const video=document.getElementById("remoteVideo");
-
-  video.srcObject=remoteStream;
-
-  try{
-    await video.play();
-    status("viewerStatus","● 接続成功・映像音声受信中");
-  }catch(e){
-    status("viewerStatus","画面をタップして再生してください");
-  }
-
-  document.getElementById("connectButton").disabled=false;
-});
+    call.on("stream",remoteStream=>{
+      document.getElementById("remoteVideo").srcObject=remoteStream;
+      status("viewerStatus","● 接続成功・映像受信中");
+      document.getElementById("connectButton").disabled=false;
+    });
 
     call.on("close",()=>{
       if(viewerCall===call){
